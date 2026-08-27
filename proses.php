@@ -3,18 +3,8 @@ header("Access-Control-Allow-Origin: *");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: POST, PUT, DELETE");
 
-$file_json = 'local_user.json';
+require_once 'koneksi.php';
 
-function readData($file) {
-    if (!file_exists($file)) return [];
-    return json_decode(file_get_contents($file), true) ?? [];
-}
-
-function saveData($file, $data) {
-    return file_put_contents($file, json_encode(array_values($data), JSON_PRETTY_PRINT));
-}
-
-// Validasi input: Menghapus pengecekan 'website' & mendukung format nomor telepon internasional/luar negeri
 function validateInput($input) {
     $required_fields = ['name', 'username', 'email'];
     
@@ -28,7 +18,6 @@ function validateInput($input) {
         return "Format email tidak valid (contoh: user@example.com).";
     }
 
-    // Mendukung tanda +, spasi, titik, strip, kurung, dan ekstensi 'x' serta batas panjang s.d 40 karakter
     if (!empty($input['phone']) && !preg_match('/^[0-9+\-\s().xX]{5,40}$/', $input['phone'])) {
         return "Format nomor telepon tidak valid.";
     }
@@ -37,7 +26,6 @@ function validateInput($input) {
 }
 
 $method = $_SERVER['REQUEST_METHOD'];
-$users = readData($file_json);
 $input = json_decode(file_get_contents("php://input"), true);
 
 switch ($method) {
@@ -49,33 +37,26 @@ switch ($method) {
             exit;
         }
 
-        $maxId = 0;
-        foreach ($users as $u) {
-            if ($u['id'] > $maxId) $maxId = $u['id'];
+        $stmt = $conn->prepare("INSERT INTO users (name, username, email, city, street, suite, zipcode, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        $name = trim($input['name']);
+        $username = trim($input['username']);
+        $email = trim($input['email']);
+        $city = trim($input['city'] ?? '');
+        $street = trim($input['street'] ?? '');
+        $suite = trim($input['suite'] ?? '');
+        $zipcode = trim($input['zipcode'] ?? '');
+        $phone = trim($input['phone'] ?? '');
+
+        $stmt->bind_param("ssssssss", $name, $username, $email, $city, $street, $suite, $zipcode, $phone);
+
+        if ($stmt->execute()) {
+            http_response_code(201);
+            echo json_encode(["status" => true, "message" => "User berhasil ditambahkan ke database SQL"]);
+        } else {
+            http_response_code(500);
+            echo json_encode(["status" => false, "message" => "Gagal menyimpan data ke database"]);
         }
-        
-        $newUser = [
-            "id" => $maxId + 1,
-            "name" => trim($input['name']),
-            "username" => trim($input['username']),
-            "email" => trim($input['email']),
-            "address" => [
-                "street" => trim($input['street'] ?? ''),
-                "suite" => trim($input['suite'] ?? ''),
-                "city" => trim($input['city'] ?? ''),
-                "zipcode" => trim($input['zipcode'] ?? ''),
-                "geo" => ["lat" => "0", "lng" => "0"]
-            ],
-            "phone" => trim($input['phone'] ?? ''),
-            "website" => "",
-            "company" => ["name" => "", "catchPhrase" => "", "bs" => ""]
-        ];
-
-        $users[] = $newUser;
-        saveData($file_json, $users);
-
-        http_response_code(201);
-        echo json_encode(["status" => true, "message" => "User berhasil ditambahkan"]);
+        $stmt->close();
         break;
 
     case 'PUT':
@@ -93,51 +74,41 @@ switch ($method) {
         }
 
         $id = intval($input['id']);
-        $updated = false;
+        $stmt = $conn->prepare("UPDATE users SET name=?, username=?, email=?, city=?, street=?, suite=?, zipcode=?, phone=? WHERE id=?");
+        
+        $name = trim($input['name']);
+        $username = trim($input['username']);
+        $email = trim($input['email']);
+        $city = trim($input['city'] ?? '');
+        $street = trim($input['street'] ?? '');
+        $suite = trim($input['suite'] ?? '');
+        $zipcode = trim($input['zipcode'] ?? '');
+        $phone = trim($input['phone'] ?? '');
 
-        foreach ($users as &$user) {
-            if ($user['id'] === $id) {
-                $user['name'] = trim($input['name']);
-                $user['username'] = trim($input['username']);
-                $user['email'] = trim($input['email']);
-                if (!isset($user['address']) || !is_array($user['address'])) {
-                    $user['address'] = [];
-                }
-                $user['address']['city'] = trim($input['city'] ?? '');
-                $user['address']['street'] = trim($input['street'] ?? '');
-                $user['address']['suite'] = trim($input['suite'] ?? '');
-                $user['address']['zipcode'] = trim($input['zipcode'] ?? '');
-                $user['phone'] = trim($input['phone'] ?? '');
-                $updated = true;
-                break;
-            }
-        }
+        $stmt->bind_param("ssssssssi", $name, $username, $email, $city, $street, $suite, $zipcode, $phone, $id);
 
-        if ($updated) {
-            saveData($file_json, $users);
-            echo json_encode(["status" => true, "message" => "Data user berhasil diperbarui"]);
+        if ($stmt->execute()) {
+            echo json_encode(["status" => true, "message" => "Data user berhasil diperbarui di database"]);
         } else {
-            http_response_code(404);
-            echo json_encode(["status" => false, "message" => "User tidak ditemukan"]);
+            http_response_code(500);
+            echo json_encode(["status" => false, "message" => "Gagal memperbarui data"]);
         }
+        $stmt->close();
         break;
 
     case 'DELETE':
         if (!empty($input['id'])) {
             $id = intval($input['id']);
-            $initialCount = count($users);
-            
-            $users = array_filter($users, function($user) use ($id) {
-                return $user['id'] !== $id;
-            });
+            $stmt = $conn->prepare("DELETE FROM users WHERE id = ?");
+            $stmt->bind_param("i", $id);
 
-            if (count($users) < $initialCount) {
-                saveData($file_json, $users);
-                echo json_encode(["status" => true, "message" => "User berhasil dihapus"]);
+            if ($stmt->execute() && $stmt->affected_rows > 0) {
+                echo json_encode(["status" => true, "message" => "User berhasil dihapus dari database"]);
             } else {
                 http_response_code(404);
                 echo json_encode(["status" => false, "message" => "User tidak ditemukan"]);
             }
+            $stmt->close();
         } else {
             http_response_code(400);
             echo json_encode(["status" => false, "message" => "ID tidak valid"]);
@@ -149,4 +120,6 @@ switch ($method) {
         echo json_encode(["status" => false, "message" => "Method tidak diizinkan"]);
         break;
 }
+
+$conn->close();
 ?>
